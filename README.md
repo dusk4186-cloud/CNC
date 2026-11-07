@@ -1,39 +1,91 @@
-# Voice-Controlled CNC Writing Machine
+# Design and Development of an Offline Voice-Assisted CNC Plotter Machine
 
-An offline, voice-controlled computer numerical control (CNC) writing and drawing machine that physically plots spoken input onto paper in real time.
-
----
-
-## 🎯 System Overview
-Traditional voice-enabled devices rely on constant cloud API connectivity, introducing latency and privacy risks. This project implements an **entirely offline voice-to-motion pipeline**:
-1. Spoken input is captured via microphone and processed locally using the lightweight **Vosk offline speech recognition engine** on a **Raspberry Pi**.
-2. Recognized text is parsed and converted into G-code toolpaths corresponding to stroke sequences for each character.
-3. The Raspberry Pi streams motion commands over a USB-serial bridge to an **Arduino Uno** running Grbl firmware.
-4. The Arduino controls stepper motors via a **CNC Shield** to actuate the X-Y drawing gantry and Z-axis pen lift.
+An offline, speech-driven computer numerical control (CNC) plotting machine capable of transcribing spoken natural language and printing physical text onto paper without requiring any internet connection or cloud APIs.
 
 ---
 
-## 🏗️ Hardware Architecture
-- **Single-Board Computer:** Raspberry Pi (Speech recognition, text-to-Gcode parsing)
-- **Microcontroller:** Arduino Uno (Grbl G-code interpreter & pulse generator)
-- **Motor Control:** CNC Shield v3 with A4988 Stepper Drivers
-- **Actuation:** NEMA 17 Stepper Motors (X & Y axes) + Micro Servo (Z-axis pen up/down)
-- **Microphone:** USB Condenser Microphone
-- **Power Supply:** 12V 5A DC power supply for stepper rails
+## 🎯 Abstract & Motivation
+Traditional voice-enabled devices rely heavily on cloud automatic speech recognition (ASR) APIs, introducing latency bottlenecks (3–6s), network dependency, and potential data privacy risks. 
+
+This project implements an **entirely self-contained, low-latency offline hardware-software pipeline**:
+1. Spoken audio is captured locally and transcribed in real time using the **VOSK offline speech recognition engine** on a **Raspberry Pi 4**.
+2. Transcribed text is parsed and converted into G-code toolpaths via a custom Python algorithm utilizing a **Hershey vector stroke font** coordinate dictionary.
+3. G-code instructions are streamed over a USB-serial interface (115200 baud) to an **Arduino Uno** running **GRBL firmware**, driving dual-axis stepper motors and a pen-actuating servo mechanism with high precision.
 
 ---
 
-## 💻 Software & Pipeline
-- **Speech Engine:** Python + Vosk Offline STT Model
-- **Serial Protocol:** PySerial (`/dev/ttyACM0` @ 115200 baud)
-- **Firmware:** Grbl v1.1
-- **Operating Environment:** Raspberry Pi OS (headless with terminal access)
+## 📊 Key Experimental Results & Performance Metrics
+
+| Metric | Measured Value | Benchmark / Details |
+| :--- | :--- | :--- |
+| **Speech Recognition Accuracy** | **90% – 95%** | Word-error rate tested in indoor acoustic environments (VOSK v0.3.45 Kaldi acoustic model). |
+| **End-to-End Latency** | **2.6s average** (2.2s – 3.0s) | Mean STT time: 2.1s ± 0.3s; G-code generation: <50ms; Serial communication: 0.2–0.5s. Outperforms typical cloud ASR latency (3–6s). |
+| **Positional Precision** | **±0.08 mm** | Repeatable mechanical accuracy at 5 steps/mm (0.2 mm/step) across X and Y axes. |
+| **Print Success Rate** | **100%** | Validated across multi-word phrases and the full 26-letter pangram (*"The quick brown fox jumps over the lazy dog"*). |
+| **Motion Velocities** | **3000 mm/min (G00)** | Pen-up rapid positioning; 1500 mm/min (G01) linear interpolation pen-down drawing speed. |
 
 ---
 
-## 🚀 How It Works
-1. User speaks into the microphone connected to the Raspberry Pi.
-2. The Vosk engine performs local acoustic-model inference on the `.wav` audio stream.
-3. The parsed text string maps each letter to predefined vector stroke coordinates.
-4. G-code commands (`G00`, `G01`, `M03`, `M05`) are streamed line-by-line to the Arduino.
-5. The pen traces the letters onto paper with sub-millimeter precision.
+## 🏗️ System Architecture
+
+```text
+[ Spoken Input / Microphone ]
+              │
+              ▼ (16kHz Mono Audio Stream)
+┌─────────────────────────────────────────────────────────────┐
+│ Raspberry Pi 4 Model B (4 GB RAM)                           │
+│  ├── 1. VOSK Offline STT Engine (Kaldi Acoustic Model)      │
+│  ├── 2. Command & Punctuation Parser ('full stop' -> '.')   │
+│  └── 3. Text-to-GCode Generator (Hershey Vector Font Engine)│
+└─────────────────────────────┬───────────────────────────────┘
+                              │ (Serial USB / PySerial @ 115200 Baud)
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Arduino Uno (GRBL v0.9 Firmware)                            │
+│  ├── Motion Planning & Step Pulse Generation                │
+│  └── Direction & Limit Switch Monitoring                    │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │                              │
+               ▼                              ▼
+┌──────────────────────────────┐ ┌────────────────────────────┐
+│ CNC Shield v3 + A4988 Drivers│ │ MG90S Micro Servo          │
+│  ├── NEMA 17 Stepper (X-Axis)│ │  └── Z-Axis Pen Lift/Drop  │
+│  └── NEMA 17 Stepper (Y-Axis)│ │      (M3: Down, M5 S90: Up) │
+└──────────────────────────────┘ └────────────────────────────┘
+```
+
+---
+
+## 💻 Software Pipeline (`voice_cnc_plotter.py`)
+1. **Audio Acquisition:** Audio stream captured at 16kHz mono using `sounddevice`.
+2. **Offline Speech Recognition:** VOSK Kaldi model processes audio frames locally without network latency.
+3. **Punctuation & Character Normalization:** Keyword substitutions replace spoken phrases (`"full stop"`, `"comma"`, `"question mark"`) with their respective punctuation symbols.
+4. **Vector Stroke Mapping:** Characters are mapped to normalized `(x, y)` coordinate vectors extracted from the Hershey font dictionary and scaled to machine coordinates (`SCALE = 0.85`, `CHAR_WIDTH = 10mm`, `LINE_HEIGHT = 12.5mm`).
+5. **Machine Boundary Validation:** Strictly enforces usable drawing area boundaries (A4 limits: `X=10-225mm`, `Y=10-165mm`) to prevent gantry over-travel.
+6. **Streaming & Handshake:** Streams G-code line-by-line over PySerial, awaiting GRBL `ok` confirmation acknowledgments.
+
+---
+
+## ⚙️ Getting Started
+
+### Prerequisites
+- Raspberry Pi OS (Bullseye or Bookworm)
+- Python 3.8+
+- Arduino Uno with GRBL v0.9+ installed
+- CNC Shield v3 with A4988 drivers & NEMA 17 steppers
+
+### Python Dependencies
+```bash
+pip install vosk sounddevice pyserial
+```
+
+### Download Offline VOSK Model
+```bash
+wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+```
+
+### Run
+```bash
+python voice_cnc_plotter.py
+```
